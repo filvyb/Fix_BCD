@@ -22,7 +22,9 @@ a selection of the existing partitions and the BCD is then adjusted
 according to your choices. (A backup file is created if any changes are made.)
 
 With option `-n`, it does not do any changes but just lists the boot
-entries and reports problems. With option `-o`, you can force the
+entries and reports problems. With option `-d`, you can restrict scanning
+to a specific drive (e.g., `sda`, `nvme0n1`), making it easier to work with
+systems that have multiple disks. With option `-o`, you can force the
 script to consider partition UUIDs as invalid and ask for replacement.
 
 You would typically run this as root on Linux with `/boot/efi/Boot/BCD`

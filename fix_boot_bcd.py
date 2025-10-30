@@ -92,7 +92,7 @@ def strip_part(nm):
     return dnm
 
 
-def collect_partuuids():
+def collect_partuuids(target_drive=None):
     """Create dicts by looking at part_uuid_path:
     * PartUUIDs has all Partition UUIDs with device names
     * PartDisks holds Disk UUID belonging to Partition UUIDs
@@ -100,6 +100,8 @@ def collect_partuuids():
     * PartDescr holds descriptions from fdisk -l
     * DiskOutput is the same table indexed by device names
     * DiskUUIDs is a table we build to avoid repeating fdisk -l all the time
+    If target_drive is specified (e.g., 'sda' or 'nvme0n1'), only partitions
+    on that drive will be collected.
     """
     part_uuid_path = "/dev/disk/by-partuuid/"
     # global PartUUIDs, DiskUUIDs, PartDisks, PartDskNm, PartDescr
@@ -108,8 +110,10 @@ def collect_partuuids():
             if entry.name.startswith('.') or not entry.is_symlink():
                 continue
             part = os.path.basename(os.readlink(entry))
-            PartUUIDs[entry.name] = part
             disknm = strip_part(part)
+            if target_drive and disknm != target_drive:
+                continue
+            PartUUIDs[entry.name] = part
             if disknm:
                 if disknm not in DiskUUIDs:
                     DiskUUIDs[disknm] = disk_uuid(disknm)
@@ -280,12 +284,13 @@ def list_and_correct_entries(regd, ovwr_list):
 
 def usage(rc=1):
     "help"
-    print("Usage: fix_boot_bcd.py [-n] [-o entry[,entry]] /PATH/TO/BCD")
+    print("Usage: fix_boot_bcd.py [-n] [-d drive] [-o entry[,entry]] /PATH/TO/BCD")
     print(" You typically need to run this as root.")
     print(" The BCD file will be changed (but a backup file is created) if any")
     print("  entries need changes. Disk UUIDs for existing partition UUIDs will by")
     print("  automatically fixed. User will be asked about non-existing partitions.")
     print(" -n prevents changes to be written to the BCD registry.")
+    print(" -d drive restricts scanning to the specified drive (e.g., sda, nvme0n1)")
     print(" -o entry[,entry[,...]] allows to interactively adjust valied boot entries")
     sys.exit(rc)
 
@@ -294,8 +299,9 @@ def main(argv):
     "Main entry point"
     nochange = False
     ovwr_list = []
+    target_drive = None
     try:
-        opts, args = getopt.gnu_getopt(argv[1:], "hno:", ('help',))
+        opts, args = getopt.gnu_getopt(argv[1:], "hnd:o:", ('help',))
     except getopt.GetoptError as exc:
         print(exc, file=sys.stderr)
         usage()
@@ -304,11 +310,13 @@ def main(argv):
             usage(0)
         elif opt == "-n":
             nochange = True
+        elif opt == "-d":
+            target_drive = arg
         elif opt == "-o":
             ovwr_list.extend(arg.split(","))
     if not args:
         usage()
-    collect_partuuids()
+    collect_partuuids(target_drive)
     # print(f"Partitions: {PartUUIDs}")
     # print(f"Disks: {DiskUUIDs}")
     # print(f"PartDisks: {PartDisks}")
