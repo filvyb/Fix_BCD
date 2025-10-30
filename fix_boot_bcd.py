@@ -148,7 +148,7 @@ def find_part_disk(hexstr):
     ln = len(hexarr)
     idx = 32
     while ln >= idx+16:
-        while hexarr[idx] == 0:
+        while idx < ln and hexarr[idx] == 0:
             idx += 4
         if ln < idx+16:
             return (ids, offs)
