@@ -24,8 +24,11 @@ according to your choices. (A backup file is created if any changes are made.)
 With option `-n`, it does not do any changes but just lists the boot
 entries and reports problems. With option `-d`, you can restrict scanning
 to a specific drive (e.g., `sda`, `nvme0n1`), making it easier to work with
-systems that have multiple disks. With option `-o`, you can force the
-script to consider partition UUIDs as invalid and ask for replacement.
+systems that have multiple disks. With options `-s` and `-d` together, you
+can specify source and target drives for automatic partition mapping by order
+(e.g., `-s sda -d nvme0n1` maps sda1→nvme0n1p1, sda2→nvme0n1p2, etc.; exits
+with error if partition counts don't match). With option `-o`, you can force
+the script to consider partition UUIDs as invalid and ask for replacement.
 
 You would typically run this as root on Linux with `/boot/efi/Boot/BCD`
 for the Windows Boot Manager and with `/boot/efi/EFI/Microsoft/Boot/BCD`

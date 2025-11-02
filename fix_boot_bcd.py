@@ -29,6 +29,8 @@ PartDisks = {}
 PartDskNm = {}
 PartDescr = {}
 DiskOutput = {}
+SourcePartUUIDs = {}
+TargetPartUUIDs = {}
 
 
 def multiws_split(stg):
@@ -92,7 +94,7 @@ def strip_part(nm):
     return dnm
 
 
-def collect_partuuids(target_drive=None):
+def collect_partuuids(target_drive=None, source_drive=None):
     """Create dicts by looking at part_uuid_path:
     * PartUUIDs has all Partition UUIDs with device names
     * PartDisks holds Disk UUID belonging to Partition UUIDs
@@ -100,29 +102,57 @@ def collect_partuuids(target_drive=None):
     * PartDescr holds descriptions from fdisk -l
     * DiskOutput is the same table indexed by device names
     * DiskUUIDs is a table we build to avoid repeating fdisk -l all the time
+    * SourcePartUUIDs has partitions from source_drive (for auto-mapping)
+    * TargetPartUUIDs has partitions from target_drive (for auto-mapping)
+
     If target_drive is specified (e.g., 'sda' or 'nvme0n1'), only partitions
-    on that drive will be collected.
+    on that drive will be collected into PartUUIDs (for manual selection).
+
+    If both source_drive and target_drive are specified (for auto-mapping):
+    - SourcePartUUIDs will contain partitions from source_drive
+    - TargetPartUUIDs will contain partitions from target_drive
+    - PartUUIDs will contain partitions from target_drive (for fallback manual mode)
     """
     part_uuid_path = "/dev/disk/by-partuuid/"
-    # global PartUUIDs, DiskUUIDs, PartDisks, PartDskNm, PartDescr
+    # global PartUUIDs, DiskUUIDs, PartDisks, PartDskNm, PartDescr, SourcePartUUIDs, TargetPartUUIDs
+
     with os.scandir(part_uuid_path) as pdir:
         for entry in pdir:
             if entry.name.startswith('.') or not entry.is_symlink():
                 continue
             part = os.path.basename(os.readlink(entry))
             disknm = strip_part(part)
+
+            include_in_main = True
             if target_drive and disknm != target_drive:
-                continue
-            PartUUIDs[entry.name] = part
-            if disknm:
-                if disknm not in DiskUUIDs:
-                    DiskUUIDs[disknm] = disk_uuid(disknm)
-                PartDisks[entry.name] = DiskUUIDs[disknm]
-                PartDskNm[entry.name] = disknm
-                if part in DiskOutput:
-                    PartDescr[entry.name] = DiskOutput[part]
-                else:
-                    PartDescr[entry.name] = ""
+                include_in_main = False
+
+            if disknm and disknm not in DiskUUIDs:
+                DiskUUIDs[disknm] = disk_uuid(disknm)
+
+            if source_drive and disknm == source_drive:
+                SourcePartUUIDs[entry.name] = part
+            if target_drive and disknm == target_drive:
+                TargetPartUUIDs[entry.name] = part
+
+            if include_in_main:
+                PartUUIDs[entry.name] = part
+                if disknm:
+                    PartDisks[entry.name] = DiskUUIDs[disknm]
+                    PartDskNm[entry.name] = disknm
+                    if part in DiskOutput:
+                        PartDescr[entry.name] = DiskOutput[part]
+                    else:
+                        PartDescr[entry.name] = ""
+
+            if source_drive and disknm == source_drive:
+                if entry.name not in PartDisks and disknm:
+                    PartDisks[entry.name] = DiskUUIDs[disknm]
+                    PartDskNm[entry.name] = disknm
+                    if part in DiskOutput:
+                        PartDescr[entry.name] = DiskOutput[part]
+                    else:
+                        PartDescr[entry.name] = ""
 
 
 def counts(arr):
@@ -178,8 +208,55 @@ def is_uuidfmt(st):
     return uuidfmt.match(st) is not None
 
 
-def select_uuid():
-    "Display list of partitions and ask user to select one"
+def build_auto_mapping(source_drive=None):
+    """Build automatic partition mapping when source drive is specified.
+
+    Maps partitions from SourcePartUUIDs to TargetPartUUIDs by order.
+    Exits with error if partition counts don't match.
+
+    Returns: dict mapping source partition UUIDs to target partition UUIDs,
+             or None if source_drive is not specified (manual mode).
+    """
+    if not source_drive:
+        return None
+
+    if not SourcePartUUIDs:
+        print(f"ERROR: No partitions found on source drive {source_drive}", file=sys.stderr)
+        sys.exit(1)
+
+    if not TargetPartUUIDs:
+        print(f"ERROR: No partitions found on target drive", file=sys.stderr)
+        sys.exit(1)
+
+    source_partitions_list = sorted(SourcePartUUIDs.keys(), key=lambda x: partkey(SourcePartUUIDs[x]))
+    target_partitions_list = sorted(TargetPartUUIDs.keys(), key=lambda x: partkey(TargetPartUUIDs[x]))
+
+    if len(source_partitions_list) != len(target_partitions_list):
+        print(f"ERROR: Partition count mismatch!", file=sys.stderr)
+        print(f"  Source drive: {len(source_partitions_list)} partition(s)", file=sys.stderr)
+        print(f"  Target drive: {len(target_partitions_list)} partition(s)", file=sys.stderr)
+        sys.exit(1)
+
+    mapping = {}
+    for i, src_uuid in enumerate(source_partitions_list):
+        mapping[src_uuid] = target_partitions_list[i]
+
+    print(f"Automatic mode: Mapping {len(mapping)} partition(s)")
+    for src, tgt in mapping.items():
+        print(f"  {src} ({SourcePartUUIDs[src]}) -> {tgt} ({TargetPartUUIDs[tgt]})")
+
+    return mapping
+
+
+def select_uuid(auto_mapping=None, source_uuid=None):
+    "Display list of partitions and ask user to select one, or use automatic mapping"
+    # If automatic mapping exists for this source UUID
+    if auto_mapping and source_uuid and source_uuid in auto_mapping:
+        target_uuid = auto_mapping[source_uuid]
+        print(f"  AUTO: Mapping {source_uuid} -> {target_uuid} ({PartUUIDs.get(target_uuid, 'unknown')})")
+        return target_uuid
+
+    # Manual mode
     print("  Disks:")
     for disk in sorted(DiskUUIDs):
         print(f"   {disk:8} : {DiskUUIDs[disk]}")
@@ -220,13 +297,15 @@ def correct_uuid(uuid, offs, dct):
     # print(dct['Element'])
 
 
-def list_and_correct_entries(regd, ovwr_list):
+def list_and_correct_entries(regd, ovwr_list, source_drive=None):
     "List boot menu entries and correct wrong disk UUIDs"
     file_key = "12000002"
     fil2_key = "22000002"
     desc_key = "12000004"
     disk_key = "11000001"
     osdk_key = "21000001"
+
+    auto_mapping = build_auto_mapping(source_drive)
 
     unfixed = 0
     fixes = 0
@@ -257,7 +336,7 @@ def list_and_correct_entries(regd, ovwr_list):
                 if ids[0] not in PartUUIDs or obk in ovwr_list or obk2 in ovwr_list:
                     print("  Partition UUID needs fixing!")
                     if not resp:
-                        resp = select_uuid()
+                        resp = select_uuid(auto_mapping, ids[0])
                     if not resp:
                         unfixed += 1
                         continue
@@ -284,13 +363,16 @@ def list_and_correct_entries(regd, ovwr_list):
 
 def usage(rc=1):
     "help"
-    print("Usage: fix_boot_bcd.py [-n] [-d drive] [-o entry[,entry]] /PATH/TO/BCD")
+    print("Usage: fix_boot_bcd.py [-n] [-s source_drive] [-d target_drive] [-o entry[,entry]] /PATH/TO/BCD")
     print(" You typically need to run this as root.")
     print(" The BCD file will be changed (but a backup file is created) if any")
     print("  entries need changes. Disk UUIDs for existing partition UUIDs will by")
     print("  automatically fixed. User will be asked about non-existing partitions.")
     print(" -n prevents changes to be written to the BCD registry.")
-    print(" -d drive restricts scanning to the specified drive (e.g., sda, nvme0n1)")
+    print(" -s source_drive specifies the source drive for automatic mapping (e.g., sda)")
+    print(" -d target_drive restricts scanning to the target drive (e.g., nvme0n1)")
+    print("    When both -s and -d are specified, partitions are automatically mapped:")
+    print("    source[i] -> target[i] (exits with error if partition counts don't match)")
     print(" -o entry[,entry[,...]] allows to interactively adjust valied boot entries")
     sys.exit(rc)
 
@@ -300,8 +382,9 @@ def main(argv):
     nochange = False
     ovwr_list = []
     target_drive = None
+    source_drive = None
     try:
-        opts, args = getopt.gnu_getopt(argv[1:], "hnd:o:", ('help',))
+        opts, args = getopt.gnu_getopt(argv[1:], "hns:d:o:", ('help',))
     except getopt.GetoptError as exc:
         print(exc, file=sys.stderr)
         usage()
@@ -310,20 +393,28 @@ def main(argv):
             usage(0)
         elif opt == "-n":
             nochange = True
+        elif opt == "-s":
+            source_drive = arg
         elif opt == "-d":
             target_drive = arg
         elif opt == "-o":
             ovwr_list.extend(arg.split(","))
     if not args:
         usage()
-    collect_partuuids(target_drive)
+
+    # Validate flags
+    if source_drive and not target_drive:
+        print("ERROR: -s (source drive) requires -d (target drive) to be specified", file=sys.stderr)
+        sys.exit(1)
+
+    collect_partuuids(target_drive, source_drive)
     # print(f"Partitions: {PartUUIDs}")
     # print(f"Disks: {DiskUUIDs}")
     # print(f"PartDisks: {PartDisks}")
     for arg in args:
         bcd = registry_dict.RegDict(arg)
         # print(bcd)
-        fixes, unfixed = list_and_correct_entries(bcd, ovwr_list)
+        fixes, unfixed = list_and_correct_entries(bcd, ovwr_list, source_drive)
         if fixes:
             if not nochange:
                 print(f"Commiting {fixes} changes to {arg}")
